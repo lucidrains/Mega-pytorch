@@ -2,7 +2,7 @@
 
 ## Mega - Pytorch (wip)
 
-Implementation of <a href="https://arxiv.org/abs/2209.10655">Mega</a>, the Single-head Attention with Multi-headed EMA architecture that currently holds SOTA on Long Range Arena
+Implementation of <a href="https://arxiv.org/abs/2209.10655">Mega</a>, the Single-head Attention with Multi-headed EMA architecture that currently holds SOTA on Long Range Arena, beating S4 on Pathfinder-X and all the other tasks save for audio.
 
 ## Citations
 
