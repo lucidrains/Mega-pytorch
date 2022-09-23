@@ -1,3 +1,5 @@
+<img src="./mega.png" width="450px"></img>
+
 ## Mega - Pytorch (wip)
 
 Implementation of <a href="https://arxiv.org/abs/2209.10655">Mega</a>, the Single-head Attention with Multi-headed EMA architecture that currently holds SOTA on Long Range Arena
