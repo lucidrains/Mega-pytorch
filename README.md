@@ -54,6 +54,7 @@ logits = mega(x) # (1, 1024, 256)
 
 ## Todo
 
+- [ ] also offer another variant of bidirectional multi-headed EMA where half the dimensions look reverse, other look forwards, harkening back to the bidirectional lstm days
 - [ ] authors mistakened about extrapolative abilities of RoPE. replace with dynamic positional bias eventually
 - [x] how did they approach bidirectionality in multi-headed EMA?
 
