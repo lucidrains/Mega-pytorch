@@ -1,6 +1,6 @@
 <img src="./mega.png" width="450px"></img>
 
-## Mega - Pytorch
+## Mega - Moving Average Equipped Gated Attention - Pytorch
 
 Implementation of the <a href="https://arxiv.org/abs/2209.10655">Mega</a> layer, the Single-head Attention with Multi-headed EMA layer that exists in the architecture that currently holds SOTA on Long Range Arena, beating S4 on Pathfinder-X and all the other tasks save for audio.
 
