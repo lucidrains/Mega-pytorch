@@ -1,0 +1,272 @@
+from functools import partial
+
+import math
+import torch
+import torch.nn.functional as F
+from torch import nn, einsum
+from torch.fft import rfft, irfft
+
+from einops import rearrange
+from scipy.fftpack import next_fast_len
+
+# functions
+
+def exists(val):
+    return val is not None
+
+def default(val, d):
+    return val if exists(val) else d
+
+def append_dims(x, num_dims):
+    if num_dims <= 0:
+        return x
+    return x.view(*x.shape, *((1,) * num_dims))
+
+def conv1d_fft(x, weights, dim = -2, weight_dim = -1):
+    # O(N log(N)) 1d convolution using some fourier trick
+
+    assert weight_dim >= dim
+
+    N = x.shape[dim]
+    M = weights.shape[weight_dim]
+
+    fast_len = next_fast_len(N + M - 1)
+
+    f_x = torch.fft.rfft(x, n = fast_len, dim = dim)
+    f_weight = torch.fft.rfft(weights, n = fast_len, dim = weight_dim)
+
+    f_v_weight = f_x * append_dims(f_weight.conj(), weight_dim - dim)
+    out = torch.fft.irfft(f_v_weight, fast_len, dim = dim)
+    out = out.roll(-1, dims = (dim,))
+
+    indices = torch.arange(start = fast_len - N, end = fast_len, dtype = torch.long, device = x.device)
+    out = out.index_select(dim, indices)
+    return out
+
+# positional bias for single-headed attention
+
+class T5RelativePositionBias(nn.Module):
+    def __init__(
+        self,
+        scale,
+        causal = False,
+        num_buckets = 32,
+        max_distance = 128
+    ):
+        super().__init__()
+        self.scale = scale
+        self.causal = causal
+        self.num_buckets = num_buckets
+        self.max_distance = max_distance
+        self.relative_attention_bias = nn.Embedding(num_buckets, 1)
+
+    @staticmethod
+    def _relative_position_bucket(
+        relative_position,
+        causal = True,
+        num_buckets = 32,
+        max_distance = 128
+    ):
+        ret = 0
+        n = -relative_position
+        if not causal:
+            num_buckets //= 2
+            ret += (n < 0).long() * num_buckets
+            n = torch.abs(n)
+        else:
+            n = torch.max(n, torch.zeros_like(n))
+
+        max_exact = num_buckets // 2
+        is_small = n < max_exact
+
+        val_if_large = max_exact + (
+            torch.log(n.float() / max_exact) / math.log(max_distance / max_exact) * (num_buckets - max_exact)
+        ).long()
+        val_if_large = torch.min(val_if_large, torch.full_like(val_if_large, num_buckets - 1))
+
+        ret += torch.where(is_small, n, val_if_large)
+        return ret
+
+    def forward(self, x):
+        i, j, device = *x.shape[-2:], x.device
+        q_pos = torch.arange(i, dtype = torch.long, device = device)
+        k_pos = torch.arange(j, dtype = torch.long, device = device)
+        rel_pos = rearrange(k_pos, 'j -> 1 j') - rearrange(q_pos, 'i -> i 1')
+        rp_bucket = self._relative_position_bucket(rel_pos, causal = self.causal, num_buckets = self.num_buckets, max_distance = self.max_distance)
+        values = self.relative_attention_bias(rp_bucket)
+        bias = rearrange(values, 'i j 1 -> i j')
+        return bias * self.scale
+
+# classes
+
+class LaplacianAttnFn(nn.Module):
+    def forward(self, x):
+        mu = math.sqrt(0.5)
+        std = math.sqrt(0.25 * math.pi)
+        return (1 + torch.special.erf((x - mu) / (std * math.sqrt(2)))) * 0.5
+
+class SingleHeadedAttention(nn.Module):
+    def __init__(
+        self,
+        *,
+        dim,
+        dim_qk,
+        dim_value,
+        causal = False,
+        laplacian_attn_fn = False
+    ):
+        super().__init__()
+        self.causal = causal
+        self.scale = (dim_qk ** (-0.5 if not laplacian_attn_fn else -1))
+
+        self.laplacian_attn_fn = laplacian_attn_fn
+        self.attn_fn = partial(F.softmax, dim = -1) if not laplacian_attn_fn else LaplacianAttnFn()
+        self.rel_pos_bias = T5RelativePositionBias(causal = causal, scale = dim_qk ** 0.5)
+
+        self.to_qk = nn.Sequential(
+            nn.Linear(dim, dim_qk, bias = False),
+            nn.SiLU()
+        )
+
+        self.to_v = nn.Sequential(
+            nn.Linear(dim, dim_value, bias = False),
+            nn.SiLU()
+        )
+
+    def forward(self, x, v_input = None):
+        is_softmax_attn = not self.laplacian_attn_fn
+
+        v_input = default(v_input, x)
+
+        qk, v = self.to_qk(x), self.to_v(v_input)
+
+        sim = einsum('b i d, b j d -> b i j', qk, qk)
+
+        sim = sim * self.scale
+        sim = sim + self.rel_pos_bias(sim)
+
+        if self.causal:
+            n, device = x.shape[1], x.device, x.dtype
+            causal_mask = torch.ones((n, n), device = device, dtype = torch.bool).triu(1)
+
+        if self.causal and not self.laplacian_attn_fn:
+            # is softmax attention and using large negative value pre-softmax
+            sim = sim.masked_fill(causal_mask, -torch.finfo(sim.dtype).max)
+
+        attn = self.attn_fn(sim)
+
+        if self.causal and self.laplacian_attn_fn:
+            # if using laplacian attention function, zero out upper triangular with 0s
+            attn = attn.masked_fill(causal_mask, 0.)
+
+        return einsum('b i j, b j d -> b i d', attn, v)
+
+class MultiHeadedEMA(nn.Module):
+    def __init__(
+        self,
+        *,
+        dim,
+        heads,
+        dim_head = None
+    ):
+        super().__init__()
+        dim_head = default(dim_head, dim)
+        inner_dim = heads * dim_head
+        self.heads = heads
+
+        self.to_inner = nn.Linear(dim, inner_dim, bias = False)
+        self.to_out = nn.Linear(inner_dim, dim, bias = False)
+
+        # learned alpha and dampening factors
+
+        self.alphas = nn.Parameter(torch.randn(heads))
+        self.dampen_factors = nn.Parameter(torch.randn(heads))
+
+    def forward(self, x):
+        device, seq_len = x.device, x.shape[1]
+
+        # project in and split heads
+
+        x = self.to_inner(x)
+        x = rearrange(x, '... (h d) -> ... h d', h = self.heads)
+
+        # weights derived from alphas (learned exponential smoothing decay rate)
+
+        alphas = self.alphas.sigmoid()
+        dampen_factors = self.dampen_factors.sigmoid()
+
+        reversed_powers = torch.arange(seq_len - 1, -1, -1, device = device)
+        K = alphas * (((1 - alphas) * dampen_factors) ** rearrange(reversed_powers, '... l -> ... l 1'))
+
+        # conv1d fft O(nlog(n))
+
+        out = conv1d_fft(x, K, dim = -3, weight_dim = -2)
+
+        # combine heads and out
+
+        out = rearrange(out, '... h d -> ... (h d)')
+        return self.to_out(out)
+
+# Mega
+# Single headed Attention + Multi-headed EMA, then GRU-esque gating
+
+class Mega(nn.Module):
+    def __init__(
+        self,
+        *,
+        dim = 128,
+        ema_heads = 16,
+        attn_dim_qk = 64,
+        attn_dim_value = 256,
+        laplacian_attn_fn = False,
+        causal = True,
+        ema_dim_head = None
+    ):
+        super().__init__()
+
+        self.single_headed_attn = SingleHeadedAttention(
+            dim = dim,
+            dim_qk = attn_dim_qk,
+            dim_value = attn_dim_value,
+            causal = causal,
+            laplacian_attn_fn = laplacian_attn_fn
+        )
+
+        self.multi_headed_ema = MultiHeadedEMA(
+            dim = dim,
+            heads = ema_heads,
+            dim_head = ema_dim_head
+        )
+
+        self.to_reset_gate = nn.Sequential(
+            nn.Linear(dim, attn_dim_value),
+            nn.SiLU()
+        )
+
+        self.to_update_gate = nn.Sequential(
+            nn.Linear(dim, dim),
+            nn.Sigmoid()
+        )
+
+        # equation 14, for calculating H
+
+        self.Wh = nn.Parameter(torch.randn(dim, dim))
+        self.Uh = nn.Parameter(torch.randn(attn_dim_value, dim))
+        self.bh = nn.Parameter(torch.randn(dim))
+
+    def forward(self, x):
+        ema_output = self.multi_headed_ema(x)
+        attn_output = self.single_headed_attn(ema_output, x)
+
+        reset_gate = self.to_reset_gate(ema_output)
+        update_gate = self.to_update_gate(ema_output)
+
+        gated_attn_output = attn_output * reset_gate
+
+        # equation 14
+
+        H = F.silu(ema_output @ self.Wh + gated_attn_output @ self.Uh + self.bh)
+
+        # update gate
+
+        return update_gate * H + (1 - update_gate) * x
