@@ -287,7 +287,9 @@ class MegaLayer(nn.Module):
         self.Uh = nn.Parameter(torch.randn(attn_dim_value, dim))
         self.bh = nn.Parameter(torch.randn(dim))
 
-    def forward(self, x):
+    def forward(self, x, residual = None):
+        residual = default(residual, x)
+
         ema_output = self.multi_headed_ema(x)
         attn_output = self.single_headed_attn(ema_output, x)
 
@@ -353,7 +355,7 @@ class Mega(nn.Module):
             mega_maybe_postnorm = mega_norm if post_norm else identity
             ff_maybe_postnorm = ff_norm if post_norm else identity
 
-            x = mega_layer(mega_maybe_prenorm(x))
+            x = mega_layer(mega_maybe_prenorm(x), x)
 
             x = mega_maybe_postnorm(x)
 
