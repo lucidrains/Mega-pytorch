@@ -191,8 +191,8 @@ class MultiHeadedEMA(nn.Module):
         inner_dim = heads * dim_head
         self.heads = heads
 
-        self.to_inner = nn.Linear(dim, inner_dim, bias = False)
-        self.to_out = nn.Linear(inner_dim, dim, bias = False)
+        self.expansion = nn.Parameter(torch.randn(heads, dim))
+        self.reduction = nn.Parameter(torch.randn(heads, dim))
 
         # learned alpha and dampening factors
 
@@ -204,8 +204,7 @@ class MultiHeadedEMA(nn.Module):
 
         # project in and split heads
 
-        x = self.to_inner(x)
-        x = rearrange(x, '... (h d) -> ... h d', h = self.heads)
+        x = einsum('... d, h d -> ... h d', x, self.expansion)
 
         # weights derived from alphas (learned exponential smoothing decay rate)
 
@@ -221,8 +220,7 @@ class MultiHeadedEMA(nn.Module):
 
         # combine heads and out
 
-        out = rearrange(out, '... h d -> ... (h d)')
-        return self.to_out(out)
+        return einsum('... h d, h d -> ... d', out, self.reduction)
 
 # Mega Layer
 # Single headed Attention + Multi-headed EMA, then GRU-esque gating
