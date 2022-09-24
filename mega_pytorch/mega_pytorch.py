@@ -323,7 +323,7 @@ class Mega(nn.Module):
         self.layers = nn.ModuleList([])
         for _ in range(depth):
             self.layers.append(nn.ModuleList([
-                MegaLayer(**kwargs),
+                MegaLayer(dim = dim, **kwargs),
                 nn.LayerNorm(dim),
                 FeedForward(dim = dim, ff_mult = ff_mult),
                 nn.LayerNorm(dim)
