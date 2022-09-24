@@ -12,6 +12,8 @@ $ pip install mega-pytorch
 
 ## Usage
 
+The Mega Layer with combination of attention and learned EMA
+
 ```python
 import torch
 from mega_pytorch import MegaLayer
@@ -25,8 +27,35 @@ layer = MegaLayer(
 )
 
 x = torch.randn(1, 1024, 128)     # (batch, seq, dim)
+
 out = layer(x) # (1, 1024, 128)
 ```
+
+Full Mega (with layernorm for now)
+
+```python
+import torch
+from mega_pytorch import Mega
+
+mega = Mega(
+    num_tokens = 256,            # number of tokens
+    dim = 128,                   # model dimensions
+    depth = 6,                   # depth
+    causal = False,              # autoregressive or not
+    ema_heads = 16,              # number of EMA heads
+    attn_dim_qk = 64,            # dimension of queries / keys in attention
+    attn_dim_value = 256,        # dimensino of values in attention
+    laplacian_attn_fn = True,    # whether to use softmax (false) or laplacian attention fn (improved relu squared)
+)
+
+x = torch.randint(0, 256, (1, 1024))
+
+logits = mega(x) # (1, 1024, 256)
+```
+
+## Todo
+
+- [ ] how did they approach bidirectionality in multi-headed EMA?
 
 ## Citations
 

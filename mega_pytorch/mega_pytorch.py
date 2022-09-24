@@ -287,3 +287,49 @@ class MegaLayer(nn.Module):
         # update gate
 
         return update_gate * H + (1 - update_gate) * x
+
+# Mega
+
+def FeedForward(dim, ff_mult):
+    dim_hidden = int(dim * ff_mult)
+    return nn.Sequential(
+        nn.Linear(dim, dim_hidden),
+        nn.GELU(),
+        nn.Linear(dim_hidden, dim)
+    )
+
+class Mega(nn.Module):
+    def __init__(
+        self,
+        *,
+        dim,
+        num_tokens,
+        depth,
+        ff_mult = 2,
+        **kwargs
+    ):
+        super().__init__()
+        self.token_emb = nn.Embedding(num_tokens, dim)
+
+        self.layers = nn.ModuleList([])
+        for _ in range(depth):
+            self.layers.append(nn.ModuleList([
+                MegaLayer(**kwargs),
+                nn.LayerNorm(dim),
+                FeedForward(dim = dim, ff_mult = ff_mult),
+                nn.LayerNorm(dim)
+            ]))
+
+        self.to_logits = nn.Linear(dim, num_tokens)
+
+    def forward(self, x):
+        x = self.token_emb(x)
+
+        for mega_layer, post_mega_norm, ff, post_ff_norm in self.layers:
+            x = mega_layer(x)
+            x = post_mega_norm(x)
+
+            x = ff(x) + x
+            x = post_ff_norm(x)
+
+        return self.to_logits(x)

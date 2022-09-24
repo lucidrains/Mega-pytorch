@@ -1,1 +1,1 @@
-from mega_pytorch.mega_pytorch import MegaLayer
+from mega_pytorch.mega_pytorch import MegaLayer, Mega
