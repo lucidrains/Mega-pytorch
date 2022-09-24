@@ -22,8 +22,8 @@ layer = MegaLayer(
     dim = 128,                   # model dimensions
     ema_heads = 16,              # number of EMA heads
     attn_dim_qk = 64,            # dimension of queries / keys in attention
-    attn_dim_value = 256,        # dimensino of values in attention
-    laplacian_attn_fn = False,   # whether to use softmax (false) or laplacian attention fn (improved relu squared)
+    attn_dim_value = 256,        # dimension of values in attention
+    laplacian_attn_fn = False,   # whether to use softmax (false) or laplacian attention activation fn (true)
 )
 
 x = torch.randn(1, 1024, 128)     # (batch, seq, dim)
@@ -44,7 +44,7 @@ mega = Mega(
     ema_heads = 16,              # number of EMA heads
     attn_dim_qk = 64,            # dimension of queries / keys in attention
     attn_dim_value = 256,        # dimensino of values in attention
-    laplacian_attn_fn = True,    # whether to use softmax (false) or laplacian attention fn (improved relu squared)
+    laplacian_attn_fn = True,    # whether to use softmax (false) or laplacian attention activation fn (true)
 )
 
 x = torch.randint(0, 256, (1, 1024))
