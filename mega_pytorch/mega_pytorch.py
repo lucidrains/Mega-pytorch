@@ -189,8 +189,8 @@ class MultiHeadedEMA(nn.Module):
         super().__init__()
         self.bidirectional = bidirectional
 
-        self.expansion = nn.Parameter(torch.randn(heads, dim))
-        self.reduction = nn.Parameter(torch.randn(heads, dim))
+        self.expansion = nn.Parameter(torch.randn(heads * (2 if bidirectional else 1), dim))
+        self.reduction = nn.Parameter(torch.randn(heads * (2 if bidirectional else 1), dim))
 
         # learned alpha and dampening factors
 
@@ -208,6 +208,10 @@ class MultiHeadedEMA(nn.Module):
 
         x = einsum('... d, h d -> ... h d', x, self.expansion)
 
+        if self.bidirectional:
+            x, x_reversed = x.chunk(2, dim = -2)
+            x_reversed = torch.flip(x_reversed, dims = (1,))
+
         # weights derived from alphas (learned exponential smoothing decay rate)
 
         def apply_learned_ema_with_damping(x, alphas, dampen_factors):
@@ -224,9 +228,9 @@ class MultiHeadedEMA(nn.Module):
         x = apply_learned_ema_with_damping(x, self.alphas, self.dampen_factors)
 
         if self.bidirectional:
-            x = torch.flip(x, dims = (1,))
-            x = apply_learned_ema_with_damping(x, self.reverse_alphas, self.reverse_dampen_factors)
-            x = torch.flip(x, dims = (1,))
+            x_reversed = apply_learned_ema_with_damping(x_reversed, self.reverse_alphas, self.reverse_dampen_factors)
+            x_reversed = torch.flip(x_reversed, dims = (1,))
+            x = torch.cat((x, x_reversed), dim = -2)
 
         # combine heads and out
 
