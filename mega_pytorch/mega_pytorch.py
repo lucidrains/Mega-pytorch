@@ -14,6 +14,9 @@ from scipy.fftpack import next_fast_len
 def exists(val):
     return val is not None
 
+def identity(t, *args, **kwargs):
+    return t
+
 def default(val, d):
     return val if exists(val) else d
 
@@ -319,10 +322,12 @@ class Mega(nn.Module):
         num_tokens,
         depth,
         ff_mult = 2,
+        pre_norm = False,
         **kwargs
     ):
         super().__init__()
         self.token_emb = nn.Embedding(num_tokens, dim)
+        self.pre_norm = pre_norm
 
         self.layers = nn.ModuleList([])
         for _ in range(depth):
@@ -336,13 +341,24 @@ class Mega(nn.Module):
         self.to_logits = nn.Linear(dim, num_tokens)
 
     def forward(self, x):
+        pre_norm = self.pre_norm
+        post_norm = not self.pre_norm
+
         x = self.token_emb(x)
 
-        for mega_layer, post_mega_norm, ff, post_ff_norm in self.layers:
-            x = mega_layer(x)
-            x = post_mega_norm(x)
+        for mega_layer, mega_norm, ff, ff_norm in self.layers:
+            mega_maybe_prenorm = mega_norm if pre_norm else identity
+            ff_maybe_prenorm = ff_norm if pre_norm else identity
 
-            x = ff(x) + x
-            x = post_ff_norm(x)
+            mega_maybe_postnorm = mega_norm if post_norm else identity
+            ff_maybe_postnorm = ff_norm if post_norm else identity
+
+            x = mega_layer(mega_maybe_prenorm(x))
+
+            x = mega_maybe_postnorm(x)
+
+            x = ff(ff_maybe_prenorm(x)) + x
+
+            x = ff_maybe_postnorm(x)
 
         return self.to_logits(x)
