@@ -340,7 +340,10 @@ class Mega(nn.Module):
                 nn.LayerNorm(dim)
             ]))
 
-        self.to_logits = nn.Linear(dim, num_tokens)
+        self.to_logits = nn.Sequential(
+            nn.LayerNorm(dim) if pre_norm else nn.Identity(),
+            nn.Linear(dim, num_tokens)
+        )
 
     def forward(self, x):
         pre_norm = self.pre_norm
