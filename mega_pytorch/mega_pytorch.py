@@ -224,10 +224,10 @@ class MultiHeadedEMA(nn.Module):
         out = rearrange(out, '... h d -> ... (h d)')
         return self.to_out(out)
 
-# Mega
+# Mega Layer
 # Single headed Attention + Multi-headed EMA, then GRU-esque gating
 
-class Mega(nn.Module):
+class MegaLayer(nn.Module):
     def __init__(
         self,
         *,

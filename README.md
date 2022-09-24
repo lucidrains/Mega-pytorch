@@ -14,9 +14,9 @@ $ pip install mega-pytorch
 
 ```python
 import torch
-from mega_pytorch import Mega
+from mega_pytorch import MegaLayer
 
-layer = Mega(
+layer = MegaLayer(
     dim = 128,                   # model dimensions
     ema_heads = 16,              # number of EMA heads
     attn_dim_qk = 64,            # dimension of queries / keys in attention
