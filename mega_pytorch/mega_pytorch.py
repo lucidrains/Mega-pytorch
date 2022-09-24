@@ -105,6 +105,17 @@ class LaplacianAttnFn(nn.Module):
         std = math.sqrt(0.25 * math.pi)
         return (1 + torch.special.erf((x - mu) / (std * math.sqrt(2)))) * 0.5
 
+class OffsetScale(nn.Module):
+    def __init__(self, dim, heads = 1):
+        super().__init__()
+        self.gamma = nn.Parameter(torch.ones(heads, dim))
+        self.beta = nn.Parameter(torch.zeros(heads, dim))
+        nn.init.normal_(self.gamma, std = 0.02)
+
+    def forward(self, x):
+        out = einsum('... d, h d -> ... h d', x, self.gamma) + self.beta
+        return out.unbind(dim = -2)
+
 class SingleHeadedAttention(nn.Module):
     def __init__(
         self,
@@ -117,32 +128,38 @@ class SingleHeadedAttention(nn.Module):
     ):
         super().__init__()
         self.causal = causal
-        self.scale = (dim_qk ** (-0.5 if not laplacian_attn_fn else -1))
-
         self.laplacian_attn_fn = laplacian_attn_fn
+
         self.attn_fn = partial(F.softmax, dim = -1) if not laplacian_attn_fn else LaplacianAttnFn()
+
         self.rel_pos_bias = T5RelativePositionBias(causal = causal, scale = dim_qk ** 0.5)
 
         self.to_qk = nn.Sequential(
-            nn.Linear(dim, dim_qk, bias = False),
+            nn.Linear(dim, dim_qk),
             nn.SiLU()
         )
 
+        self.offsetscale = OffsetScale(dim_qk, heads = 2)
+
         self.to_v = nn.Sequential(
-            nn.Linear(dim, dim_value, bias = False),
+            nn.Linear(dim, dim_value),
             nn.SiLU()
         )
 
     def forward(self, x, v_input = None):
+        seq_len, dim = x.shape[-2:]
+
         is_softmax_attn = not self.laplacian_attn_fn
 
         v_input = default(v_input, x)
 
         qk, v = self.to_qk(x), self.to_v(v_input)
+        q, k = self.offsetscale(qk)
 
-        sim = einsum('b i d, b j d -> b i j', qk, qk)
+        scale = (seq_len ** -1) if self.laplacian_attn_fn else (dim ** -0.5)
 
-        sim = sim * self.scale
+        sim = einsum('b i d, b j d -> b i j', q, k) * scale
+
         sim = sim + self.rel_pos_bias(sim)
 
         if self.causal:
