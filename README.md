@@ -56,6 +56,7 @@ logits = mega(x) # (1, 1024, 256)
 ## Todo
 
 - [ ] how did they approach bidirectionality in multi-headed EMA?
+- [ ] authors mistakened about extrapolative abilities of RoPE. replace with dynamic positional bias eventually
 
 ## Citations
 
