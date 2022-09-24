@@ -147,7 +147,7 @@ class SingleHeadedAttention(nn.Module):
         )
 
     def forward(self, x, v_input = None):
-        seq_len, dim = x.shape[-2:]
+        seq_len, dim, device, dtype = *x.shape[-2:], x.device, x.dtype
 
         is_softmax_attn = not self.laplacian_attn_fn
 
@@ -163,8 +163,7 @@ class SingleHeadedAttention(nn.Module):
         sim = sim + self.rel_pos_bias(sim)
 
         if self.causal:
-            n, device = x.shape[1], x.device, x.dtype
-            causal_mask = torch.ones((n, n), device = device, dtype = torch.bool).triu(1)
+            causal_mask = torch.ones((seq_len, seq_len), device = device, dtype = torch.bool).triu(1)
 
         if self.causal and not self.laplacian_attn_fn:
             # is softmax attention and using large negative value pre-softmax
@@ -184,12 +183,11 @@ class MultiHeadedEMA(nn.Module):
         *,
         dim,
         heads,
+        bidirectional = False,
         dim_head = None
     ):
         super().__init__()
-        dim_head = default(dim_head, dim)
-        inner_dim = heads * dim_head
-        self.heads = heads
+        self.bidirectional = bidirectional
 
         self.expansion = nn.Parameter(torch.randn(heads, dim))
         self.reduction = nn.Parameter(torch.randn(heads, dim))
@@ -198,6 +196,10 @@ class MultiHeadedEMA(nn.Module):
 
         self.alphas = nn.Parameter(torch.randn(heads))
         self.dampen_factors = nn.Parameter(torch.randn(heads))
+
+        if bidirectional:
+            self.reverse_alphas = nn.Parameter(torch.randn(heads))
+            self.reverse_dampen_factors = nn.Parameter(torch.randn(heads))
 
     def forward(self, x):
         device, seq_len = x.device, x.shape[1]
@@ -208,19 +210,27 @@ class MultiHeadedEMA(nn.Module):
 
         # weights derived from alphas (learned exponential smoothing decay rate)
 
-        alphas = self.alphas.sigmoid()
-        dampen_factors = self.dampen_factors.sigmoid()
+        def apply_learned_ema_with_damping(x, alphas, dampen_factors):
+            alphas = alphas.sigmoid()
+            dampen_factors = dampen_factors.sigmoid()
 
-        reversed_powers = torch.arange(seq_len - 1, -1, -1, device = device)
-        K = alphas * (((1 - alphas) * dampen_factors) ** rearrange(reversed_powers, '... l -> ... l 1'))
+            reversed_powers = torch.arange(seq_len - 1, -1, -1, device = device)
+            K = alphas * (((1 - alphas) * dampen_factors) ** rearrange(reversed_powers, '... l -> ... l 1'))
 
-        # conv1d fft O(nlog(n))
+            # conv1d fft O(nlog(n))
 
-        out = conv1d_fft(x, K, dim = -3, weight_dim = -2)
+            return conv1d_fft(x, K, dim = -3, weight_dim = -2)
+
+        x = apply_learned_ema_with_damping(x, self.alphas, self.dampen_factors)
+
+        if self.bidirectional:
+            x = torch.flip(x, dims = (1,))
+            x = apply_learned_ema_with_damping(x, self.reverse_alphas, self.reverse_dampen_factors)
+            x = torch.flip(x, dims = (1,))
 
         # combine heads and out
 
-        return einsum('... h d, h d -> ... d', out, self.reduction)
+        return einsum('... h d, h d -> ... d', x, self.reduction)
 
 # Mega Layer
 # Single headed Attention + Multi-headed EMA, then GRU-esque gating
@@ -250,6 +260,7 @@ class MegaLayer(nn.Module):
         self.multi_headed_ema = MultiHeadedEMA(
             dim = dim,
             heads = ema_heads,
+            bidirectional = not causal,
             dim_head = ema_dim_head
         )
 
