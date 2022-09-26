@@ -1,6 +1,6 @@
+import math
 from functools import partial
 
-import math
 import torch
 import torch.nn.functional as F
 from torch import nn, einsum
@@ -35,11 +35,11 @@ def conv1d_fft(x, weights, dim = -2, weight_dim = -1):
 
     fast_len = next_fast_len(N + M - 1)
 
-    f_x = torch.fft.rfft(x, n = fast_len, dim = dim)
-    f_weight = torch.fft.rfft(weights, n = fast_len, dim = weight_dim)
+    f_x = rfft(x, n = fast_len, dim = dim)
+    f_weight = rfft(weights, n = fast_len, dim = weight_dim)
 
     f_v_weight = f_x * append_dims(f_weight.conj(), weight_dim - dim)
-    out = torch.fft.irfft(f_v_weight, fast_len, dim = dim)
+    out = irfft(f_v_weight, fast_len, dim = dim)
     out = out.roll(-1, dims = (dim,))
 
     indices = torch.arange(start = fast_len - N, end = fast_len, dtype = torch.long, device = x.device)
@@ -151,8 +151,6 @@ class SingleHeadedAttention(nn.Module):
 
     def forward(self, x, v_input = None):
         seq_len, dim, device, dtype = *x.shape[-2:], x.device, x.dtype
-
-        is_softmax_attn = not self.laplacian_attn_fn
 
         v_input = default(v_input, x)
 
