@@ -302,7 +302,7 @@ class MegaLayer(nn.Module):
 
         # update gate
 
-        return update_gate * H + (1 - update_gate) * x
+        return update_gate * H + (1 - update_gate) * residual
 
 # Mega
 
