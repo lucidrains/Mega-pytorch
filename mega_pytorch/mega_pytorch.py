@@ -7,6 +7,8 @@ from torch import nn, einsum
 from torch.fft import rfft, irfft
 
 from einops import rearrange
+from einops.layers.torch import Rearrange
+
 from scipy.fftpack import next_fast_len
 
 # functions
@@ -185,7 +187,7 @@ class MultiHeadedEMA(nn.Module):
         dim,
         heads,
         bidirectional = False,
-        dim_head = None
+        norm_mhesa_heads = False
     ):
         super().__init__()
         self.bidirectional = bidirectional
@@ -201,6 +203,19 @@ class MultiHeadedEMA(nn.Module):
         if bidirectional:
             self.reverse_alphas = nn.Parameter(torch.randn(heads))
             self.reverse_dampen_factors = nn.Parameter(torch.randn(heads))
+
+        self.heads = heads
+
+        self.norm_heads = nn.Identity()
+
+        if norm_mhesa_heads:
+            # https://arxiv.org/abs/2210.06423 - retnet used sub-ln with some success as groupnorm
+
+            self.norm_heads = nn.Sequential(
+                Rearrange('b n h d -> b (h d) n'),
+                nn.GroupNorm(heads, dim * heads),
+                Rearrange('b (h d) n -> b n h d', h = heads)
+            )
 
     def forward(self, x):
         device, seq_len = x.device, x.shape[1]
@@ -233,6 +248,10 @@ class MultiHeadedEMA(nn.Module):
             x_reversed = torch.flip(x_reversed, dims = (1,))
             x = torch.cat((x, x_reversed), dim = -2)
 
+        # maybe norm heads
+
+        x = self.norm_heads(x)
+
         # combine heads and out
 
         return einsum('... h d, h d -> ... d', x, self.reduction)
@@ -250,7 +269,7 @@ class MegaLayer(nn.Module):
         attn_dim_value = 256,
         laplacian_attn_fn = False,
         causal = True,
-        ema_dim_head = None
+        norm_mhesa_heads = False
     ):
         super().__init__()
 
@@ -266,7 +285,7 @@ class MegaLayer(nn.Module):
             dim = dim,
             heads = ema_heads,
             bidirectional = not causal,
-            dim_head = ema_dim_head
+            norm_mhesa_heads = norm_mhesa_heads
         )
 
         self.to_reset_gate = nn.Sequential(
